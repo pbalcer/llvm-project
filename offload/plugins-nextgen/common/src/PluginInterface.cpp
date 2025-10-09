@@ -401,7 +401,7 @@ Error GenericKernelTy::init(GenericDeviceTy &GenericDevice,
                             DeviceImageTy &Image) {
 
   ImagePtr = &Image;
-
+  return initImpl(GenericDevice, Image);
   // Retrieve kernel environment object for the kernel.
   std::string EnvironmentName = std::string(Name) + "_kernel_environment";
   GenericGlobalHandlerTy &GHandler = GenericDevice.Plugin.getGlobalHandler();
@@ -804,6 +804,7 @@ Error GenericDeviceTy::unloadBinary(DeviceImageTy *Image) {
     DeviceMemoryPoolTracking.combine(ImageDeviceMemoryPoolTracking);
   }
 
+  /*
   GenericGlobalHandlerTy &Handler = Plugin.getGlobalHandler();
   auto ProfOrErr = Handler.readProfilingGlobals(*this, *Image);
   if (!ProfOrErr)
@@ -819,7 +820,7 @@ Error GenericDeviceTy::unloadBinary(DeviceImageTy *Image) {
     if (auto Err = ProfOrErr->write())
       return Err;
   }
-
+*/
   return unloadBinaryImpl(Image);
 }
 

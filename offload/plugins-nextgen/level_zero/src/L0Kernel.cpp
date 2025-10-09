@@ -46,6 +46,11 @@ Error L0KernelTy::initImpl(GenericDeviceTy &GenericDevice,
                            DeviceImageTy &Image) {
   auto &Program = L0ProgramTy::makeL0Program(Image);
 
+  auto &l0Device = L0DeviceTy::makeL0Device(GenericDevice);
+  Properties.SIMDWidth = 1;
+  Properties.Width = 1;
+  Properties.MaxThreadGroupSize = 1;
+
   Error Err = buildKernel(Program);
   if (Err)
     return Err;
@@ -519,6 +524,9 @@ int32_t L0KernelTy::runTargetTeamRegion(L0DeviceTy &l0Device,
        "Number of teams = {%" PRIu32 ", %" PRIu32 ", %" PRIu32 "}\n",
        GroupCounts.groupCountX, GroupCounts.groupCountY,
        GroupCounts.groupCountZ);
+
+  NumArgs = LaunchParams.Size / sizeof(void*);
+
   for (int32_t I = 0; I < NumArgs; I++) {
     {
       void *Arg = (static_cast<void **>(LaunchParams.Data))[I];
@@ -546,8 +554,7 @@ int32_t L0KernelTy::runTargetTeamRegion(L0DeviceTy &l0Device,
   }
 
   if (!GroupParamsReused) {
-    CALL_ZE_RET_FAIL(zeKernelSetGroupSize, zeKernel, GroupSizes[0],
-                     GroupSizes[1], GroupSizes[2]);
+    CALL_ZE_RET_FAIL(zeKernelSetGroupSize, zeKernel, KernelArgs.ThreadLimit[0], KernelArgs.ThreadLimit[1], KernelArgs.ThreadLimit[2]);
   }
 
   ze_command_list_handle_t CmdList = nullptr;
@@ -561,6 +568,7 @@ int32_t L0KernelTy::runTargetTeamRegion(L0DeviceTy &l0Device,
     CmdList = Device.getCmdList();
     CmdQueue = Device.getCmdQueue();
   }
+  GroupCounts = {KernelArgs.NumTeams[0], KernelArgs.NumTeams[1], KernelArgs.NumTeams[2]};
 
   if (UseImmCmdList) {
     INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,

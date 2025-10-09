@@ -439,7 +439,7 @@ Error L0DeviceTy::unloadBinaryImpl(DeviceImageTy *Image) {
 
 Error L0DeviceTy::synchronizeImpl(__tgt_async_info &AsyncInfo,
                                   bool ReleaseQueue) {
-  if (!ReleaseQueue) {
+  if (0 && !ReleaseQueue) {
     return Plugin::error(ErrorCode::UNIMPLEMENTED,
                          "Support for ReleaseQueue=false in %s"
                          " not implemented yet\n",
