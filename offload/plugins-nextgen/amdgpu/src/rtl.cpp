@@ -4144,11 +4144,32 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (auto Err = GenericDevice.getDeviceStackSize(StackSize))
     return Err;
 
-  // Copy the explicit arguments.
-  // TODO: We should expose the args memory manager alloc to the common part as
-  // 	   alternative to copying them twice.
-  if (LaunchParams.Size)
-    std::memcpy(AllArgs, LaunchParams.Data, LaunchParams.Size);
+  // Copy explicit arguments.
+  size_t ExplicitEnd = 0;
+  if (KernelArgs.Flags.IsPtrArgs) {
+    if (KernelArgs.ArgPtrs) { // may be null
+      const auto &ArgMDs = KernelInfo->ExplicitArgMDs;
+
+      if (KernelArgs.NumArgs != ArgMDs.size())
+        return Plugin::error(
+            ErrorCode::INVALID_ARGUMENT,
+            "Number of arguments (%u) does not match the number of arguments "
+            "expected by the kernel (%zu)",
+            KernelArgs.NumArgs, ArgMDs.size());
+
+      for (size_t I = 0; I < ArgMDs.size(); I++)
+        std::memcpy(utils::advancePtr(AllArgs, ArgMDs[I].Offset),
+                    KernelArgs.ArgPtrs[I], ArgMDs[I].Size);
+
+      ExplicitEnd = ArgMDs.back().Offset + ArgMDs.back().Size;
+    }
+  } else {
+    // TODO: We should expose the args memory manager alloc to the common part
+    // as alternative to copying them twice.
+    if (LaunchParams.Size)
+      std::memcpy(AllArgs, LaunchParams.Data, LaunchParams.Size);
+    ExplicitEnd = LaunchParams.Size;
+  }
 
   AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
 
@@ -4156,8 +4177,8 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (auto Err = AMDGPUDevice.getStream(AsyncInfoWrapper, Stream))
     return Err;
 
-  uint64_t ImplArgsOffset = llvm::alignTo(
-      LaunchParams.Size, alignof(hsa_utils::AMDGPUImplicitArgsTy));
+  uint64_t ImplArgsOffset =
+      llvm::alignTo(ExplicitEnd, alignof(hsa_utils::AMDGPUImplicitArgsTy));
   if (ArgsSize > ImplArgsOffset) {
     hsa_utils::AMDGPUImplicitArgsTy *ImplArgs =
         reinterpret_cast<hsa_utils::AMDGPUImplicitArgsTy *>(

@@ -1050,9 +1050,10 @@ Error olCalculateOptimalOccupancy_impl(ol_device_handle_t Device,
 }
 
 Error olLaunchKernel_impl(ol_queue_handle_t Queue, ol_device_handle_t Device,
-                          ol_symbol_handle_t Kernel, const void *ArgumentsData,
-                          size_t ArgumentsSize,
-                          const ol_kernel_launch_size_args_t *LaunchSizeArgs) {
+                          ol_symbol_handle_t Kernel,
+                          const ol_kernel_launch_size_args_t *LaunchSizeArgs,
+                          size_t NumArgs, void **ArgPtrs,
+                          const size_t *ArgSizes) {
   auto *DeviceImpl = Device->Device;
   if (Queue && Device != Queue->Device) {
     return createOffloadError(
@@ -1067,6 +1068,8 @@ Error olLaunchKernel_impl(ol_queue_handle_t Queue, ol_device_handle_t Device,
   auto *QueueImpl = Queue ? Queue->AsyncInfo : nullptr;
   AsyncInfoWrapperTy AsyncInfoWrapper(*DeviceImpl, QueueImpl);
   KernelArgsTy LaunchArgs{};
+  // TODO: change LaunchArgs.NumArgs to size_t to match the API type
+  LaunchArgs.NumArgs = static_cast<uint32_t>(NumArgs);
   LaunchArgs.NumTeams[0] = LaunchSizeArgs->NumGroups.x;
   LaunchArgs.NumTeams[1] = LaunchSizeArgs->NumGroups.y;
   LaunchArgs.NumTeams[2] = LaunchSizeArgs->NumGroups.z;
@@ -1075,12 +1078,11 @@ Error olLaunchKernel_impl(ol_queue_handle_t Queue, ol_device_handle_t Device,
   LaunchArgs.ThreadLimit[2] = LaunchSizeArgs->GroupSize.z;
   LaunchArgs.DynCGroupMem = LaunchSizeArgs->DynSharedMemory;
 
-  KernelLaunchParamsTy Params;
-  Params.Data = const_cast<void *>(ArgumentsData);
-  Params.Size = ArgumentsSize;
-  LaunchArgs.ArgPtrs = reinterpret_cast<void **>(&Params);
-  // Don't do anything with pointer indirection; use arg data as-is
-  LaunchArgs.Flags.IsCUDA = true;
+  LaunchArgs.ArgPtrs = ArgPtrs;
+  // TODO: Either change ArgSizes to const size_t * or add a new variable.
+  LaunchArgs.ArgSizes =
+      reinterpret_cast<int64_t *>(const_cast<size_t *>(ArgSizes));
+  LaunchArgs.Flags.IsPtrArgs = 1;
 
   auto *KernelImpl = std::get<GenericKernelTy *>(Kernel->PluginImpl);
   auto Err = KernelImpl->launch(*DeviceImpl, LaunchArgs.ArgPtrs, nullptr,
