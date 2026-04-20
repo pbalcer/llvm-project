@@ -286,6 +286,32 @@ private:
       KernelData.WavefrontSize = V.second.getUInt();
     } else if (IsKey(V.first, ".max_flat_workgroup_size")) {
       KernelData.MaxFlatWorkgroupSize = V.second.getUInt();
+    } else if (IsKey(V.first, ".args")) {
+      auto ArgsArray = V.second.getArray();
+      for (auto ArgIt = ArgsArray.begin(), ArgEnd = ArgsArray.end();
+           ArgIt != ArgEnd; ++ArgIt) {
+        auto ArgMap = ArgIt->getMap();
+        // Skip hidden arguments (e.g., hidden_global_offset_x).
+        auto VKIt = ArgMap.find(".value_kind");
+        if (VKIt != ArgMap.end() && VKIt->second.isString() &&
+            VKIt->second.getString().starts_with("hidden_"))
+          continue;
+
+        auto OffsetIt = ArgMap.find(".offset");
+        if (OffsetIt == ArgMap.end())
+          return createStringError(
+              inconvertibleErrorCode(),
+              "Missing required .offset key in kernel argument metadata map");
+        auto SizeIt = ArgMap.find(".size");
+        if (SizeIt == ArgMap.end())
+          return createStringError(
+              inconvertibleErrorCode(),
+              "Missing required .size key in kernel argument metadata map");
+
+        KernelData.ExplicitArgMDs.push_back(
+            {static_cast<uint32_t>(OffsetIt->second.getUInt()),
+             static_cast<uint32_t>(SizeIt->second.getUInt())});
+      }
     }
 
     return Error::success();

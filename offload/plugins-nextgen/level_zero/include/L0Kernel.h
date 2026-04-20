@@ -129,6 +129,11 @@ public:
                    uint32_t NumBlocks[3], uint32_t DynBlockMemSize,
                    KernelArgsTy &KernelArgs, KernelLaunchParamsTy LaunchParams,
                    AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
+  /// Launch with an array of pointers and sizes for each argument.
+  Error launchWithPtrArgs(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+                       uint32_t NumBlocks[3], uint32_t DynBlockMemSize,
+                       void **ArgPtrs, const size_t *ArgSizes,
+                       AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
   Error deinit() {
     CALL_ZE_RET_ERROR(zeKernelDestroy, zeKernel);
     return Plugin::success();

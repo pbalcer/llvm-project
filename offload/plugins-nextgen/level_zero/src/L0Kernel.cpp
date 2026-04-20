@@ -502,4 +502,134 @@ Error L0KernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   return launchKernelWithCmdQueue(l0Device, zeKernel, KEnv);
 }
 
+Error L0KernelTy::launchWithPtrArgs(GenericDeviceTy &GenericDevice,
+                                 uint32_t NumThreads[3],
+                                 uint32_t NumBlocks[3],
+                                 uint32_t DynBlockMemSize,
+                                 void **ArgPtrs,
+                                 const size_t *ArgSizes,
+                                 AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+  if (DynBlockMemSize > 0)
+    return Plugin::error(ErrorCode::UNSUPPORTED,
+                         "dynamic shared memory is unsupported in L0 plugin");
+
+  auto &l0Device = L0DeviceTy::makeL0Device(GenericDevice);
+  __tgt_async_info *AsyncInfo = AsyncInfoWrapper;
+
+  auto zeKernel = getZeKernel();
+  auto DeviceId = l0Device.getDeviceId();
+  INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId, "Launching kernel " DPxMOD "...\n",
+       DPxPTR(zeKernel));
+
+  auto &Plugin = l0Device.getPlugin();
+  auto *IdStr = l0Device.getZeIdCStr();
+  bool IsAsync = AsyncInfo && l0Device.asyncEnabled();
+  if (IsAsync && !AsyncInfo->Queue) {
+    AsyncInfo->Queue = reinterpret_cast<void *>(Plugin.getAsyncQueue());
+    if (!AsyncInfo->Queue)
+      IsAsync = false;
+  }
+  auto *AsyncQueue =
+      IsAsync ? static_cast<AsyncQueueTy *>(AsyncInfo->Queue) : nullptr;
+  auto &KernelPR = getProperties();
+
+  L0LaunchEnvTy KEnv(IsAsync, AsyncQueue, KernelPR);
+
+  // Protect from kernel preparation to submission as kernels are shared.
+  KEnv.Lock.lock();
+
+  if (auto Err = setIndirectFlags(l0Device, KEnv))
+    return Err;
+
+  ze_group_count_t GroupCounts = {NumBlocks[0], NumBlocks[1], NumBlocks[2]};
+  ze_group_size_t GroupSizes = {NumThreads[0], NumThreads[1], NumThreads[2]};
+
+  INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+       "Team sizes = {%" PRIu32 ", %" PRIu32 ", %" PRIu32 "}\n",
+       GroupSizes.groupSizeX, GroupSizes.groupSizeY, GroupSizes.groupSizeZ);
+  INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+       "Number of teams = {%" PRIu32 ", %" PRIu32 ", %" PRIu32 "}\n",
+       GroupCounts.groupCountX, GroupCounts.groupCountY,
+       GroupCounts.groupCountZ);
+
+  const bool UseImmCmdList = l0Device.useImmForCompute();
+  ze_command_list_handle_t CmdList;
+  ze_event_handle_t Event = nullptr;
+  size_t NumWaitEvents = 0;
+  ze_event_handle_t *WaitEvents = nullptr;
+
+  if (UseImmCmdList) {
+    auto CmdListOrErr = l0Device.getImmCmdList();
+    if (!CmdListOrErr)
+      return CmdListOrErr.takeError();
+    CmdList = *CmdListOrErr;
+
+    auto EventOrError = l0Device.getEvent();
+    if (!EventOrError)
+      return EventOrError.takeError();
+    Event = *EventOrError;
+
+    if (KEnv.IsAsync && !AsyncQueue->WaitEvents.empty()) {
+      auto &Options = Plugin.getOptions();
+      if (Options.CommandMode == CommandModeTy::AsyncOrdered) {
+        NumWaitEvents = 1;
+        WaitEvents = &AsyncQueue->WaitEvents.back();
+      } else {
+        NumWaitEvents = AsyncQueue->WaitEvents.size();
+        WaitEvents = AsyncQueue->WaitEvents.data();
+      }
+    }
+  } else {
+    auto CmdListOrErr = l0Device.getCmdList();
+    if (!CmdListOrErr)
+      return CmdListOrErr.takeError();
+    CmdList = *CmdListOrErr;
+  }
+
+  CALL_ZE_RET_ERROR(zeCommandListAppendLaunchKernelWithArguments, CmdList,
+                    zeKernel, GroupCounts, GroupSizes, ArgPtrs, nullptr, Event,
+                    NumWaitEvents, WaitEvents);
+  KEnv.Lock.unlock();
+
+  if (UseImmCmdList) {
+    INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+         "Submitted kernel " DPxMOD " to device %s\n", DPxPTR(zeKernel), IdStr);
+
+    if (KEnv.IsAsync) {
+      AsyncQueue->WaitEvents.push_back(Event);
+      AsyncQueue->KernelEvent = Event;
+    } else {
+      Error AllErrors = Error::success();
+      CALL_ZE_ACCUM_ERROR(AllErrors, zeEventHostSynchronize, Event,
+                          L0DefaultTimeout);
+      if (auto Err = l0Device.releaseEvent(Event))
+        AllErrors = joinErrors(std::move(AllErrors), std::move(Err));
+      if (AllErrors)
+        return AllErrors;
+    }
+  } else {
+    CALL_ZE_RET_ERROR(zeCommandListClose, CmdList);
+
+    llvm::scope_exit ResetOnExit(
+        [&]() { CALL_ZE_SILENT(zeCommandListReset, CmdList); });
+
+    auto CmdQueueOrErr = l0Device.getCmdQueue();
+    if (!CmdQueueOrErr)
+      return CmdQueueOrErr.takeError();
+    ze_command_queue_handle_t CmdQueue = *CmdQueueOrErr;
+
+    CALL_ZE_RET_ERROR_MTX(zeCommandQueueExecuteCommandLists,
+                          l0Device.getMutex(), CmdQueue, 1, &CmdList, nullptr);
+    INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+         "Submitted kernel " DPxMOD " to device %s\n", DPxPTR(zeKernel), IdStr);
+    CALL_ZE_RET_ERROR(zeCommandQueueSynchronize, CmdQueue, L0DefaultTimeout);
+  }
+
+  INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+       "Executed kernel entry " DPxMOD " on device %s\n", DPxPTR(zeKernel),
+       IdStr);
+
+  return Plugin::success();
+}
+
 } // namespace llvm::omp::target::plugin

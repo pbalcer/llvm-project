@@ -1096,6 +1096,45 @@ Error olLaunchKernel_impl(ol_queue_handle_t Queue, ol_device_handle_t Device,
   return Error::success();
 }
 
+Error olLaunchKernelWithPtrArgs_impl(
+    ol_queue_handle_t Queue, ol_device_handle_t Device,
+    ol_symbol_handle_t Kernel, void **ArgPtrs,
+    const size_t *ArgSizes,
+    const ol_kernel_launch_size_args_t *LaunchSizeArgs) {
+  auto *DeviceImpl = Device->Device;
+  if (Queue && Device != Queue->Device) {
+    return createOffloadError(
+        ErrorCode::INVALID_DEVICE,
+        "device specified does not match the device of the given queue");
+  }
+
+  if (Kernel->Kind != OL_SYMBOL_KIND_KERNEL)
+    return createOffloadError(ErrorCode::SYMBOL_KIND,
+                              "provided symbol is not a kernel");
+
+  auto *QueueImpl = Queue ? Queue->AsyncInfo : nullptr;
+  AsyncInfoWrapperTy AsyncInfoWrapper(*DeviceImpl, QueueImpl);
+
+  uint32_t NumThreads[3] = {static_cast<uint32_t>(LaunchSizeArgs->GroupSize.x),
+                            static_cast<uint32_t>(LaunchSizeArgs->GroupSize.y),
+                            static_cast<uint32_t>(LaunchSizeArgs->GroupSize.z)};
+  uint32_t NumBlocks[3] = {static_cast<uint32_t>(LaunchSizeArgs->NumGroups.x),
+                           static_cast<uint32_t>(LaunchSizeArgs->NumGroups.y),
+                           static_cast<uint32_t>(LaunchSizeArgs->NumGroups.z)};
+  uint32_t DynSharedMem = LaunchSizeArgs->DynSharedMemory;
+
+  auto *KernelImpl = std::get<GenericKernelTy *>(Kernel->PluginImpl);
+  auto Err = KernelImpl->launchWithPtrArgs(*DeviceImpl, NumThreads, NumBlocks,
+                                        DynSharedMem, ArgPtrs, ArgSizes,
+                                        AsyncInfoWrapper);
+
+  AsyncInfoWrapper.finalize(Err);
+  if (Err)
+    return Err;
+
+  return Error::success();
+}
+
 Error olGetSymbol_impl(ol_program_handle_t Program, const char *Name,
                        ol_symbol_kind_t Kind, ol_symbol_handle_t *Symbol) {
   auto &Device = Program->Image->getDevice();

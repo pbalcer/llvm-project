@@ -431,6 +431,17 @@ struct GenericKernelTy {
                            KernelLaunchParamsTy LaunchParams,
                            AsyncInfoWrapperTy &AsyncInfoWrapper) const = 0;
 
+  /// Launch the kernel with an array of pointers and sizes for each argument.
+  virtual Error launchWithPtrArgs(GenericDeviceTy &GenericDevice,
+                               uint32_t NumThreads[3], uint32_t NumBlocks[3],
+                               uint32_t DynBlockMemSize,
+                               void **ArgPtrs,
+                               const size_t *ArgSizes,
+                               AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+    return Plugin::error(error::ErrorCode::UNIMPLEMENTED,
+                         "launchWithPtrArgs not implemented for this plugin");
+  }
+
   virtual Expected<uint64_t> maxGroupSize(GenericDeviceTy &GenericDevice,
                                           uint64_t DynamicMemSize) const = 0;
 

@@ -142,6 +142,12 @@ struct CUDAKernelTy : public GenericKernelTy {
                    KernelArgsTy &KernelArgs, KernelLaunchParamsTy LaunchParams,
                    AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
 
+  /// Launch with an array of pointers and sizes for each argument.
+  Error launchWithPtrArgs(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+                       uint32_t NumBlocks[3], uint32_t DynBlockMemSize,
+                       void **ArgPtrs, const size_t *ArgSizes,
+                       AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
+
   /// Return maximum block size for maximum occupancy
   Expected<uint64_t> maxGroupSize(GenericDeviceTy &,
                                   uint64_t DynamicMemSize) const override {
@@ -157,6 +163,12 @@ struct CUDAKernelTy : public GenericKernelTy {
   }
 
 private:
+  Error launchKernelCommon(GenericDeviceTy &GenericDevice,
+                           uint32_t NumThreads[3], uint32_t NumBlocks[3],
+                           uint32_t DynBlockMemSize, void **KernelParams,
+                           void **Extra,
+                           AsyncInfoWrapperTy &AsyncInfoWrapper) const;
+
   /// Initialize the size of the arguments.
   Error initArgsSize() {
     CUresult Res;
@@ -1428,36 +1440,19 @@ private:
   VMemTrackerTy<CUmemGenericAllocationHandle> VMemTracker;
 };
 
-Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
-                               uint32_t NumThreads[3], uint32_t NumBlocks[3],
-                               uint32_t DynBlockMemSize,
-                               KernelArgsTy &KernelArgs,
-                               KernelLaunchParamsTy LaunchParams,
-                               AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+Error CUDAKernelTy::launchKernelCommon(
+    GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+    uint32_t NumBlocks[3], uint32_t DynBlockMemSize, void **KernelParams,
+    void **Extra, AsyncInfoWrapperTy &AsyncInfoWrapper) const {
   CUDADeviceTy &CUDADevice = static_cast<CUDADeviceTy &>(GenericDevice);
-
-  // The args size passed in LaunchParams may have tail padding, which is not
-  // accepted by the CUDA driver.
-  if (ArgsSize > LaunchParams.Size)
-    return Plugin::error(ErrorCode::INVALID_ARGUMENT,
-                         "mismatch in kernel arguments");
 
   CUstream Stream;
   if (auto Err = CUDADevice.getStream(AsyncInfoWrapper, Stream))
     return Err;
 
-  size_t ConfigArgsSize = ArgsSize;
-  void *Config[] = {CU_LAUNCH_PARAM_BUFFER_POINTER, LaunchParams.Data,
-                    CU_LAUNCH_PARAM_BUFFER_SIZE,
-                    reinterpret_cast<void *>(&ConfigArgsSize),
-                    CU_LAUNCH_PARAM_END};
-
-  // If we are running an RPC server we want to wake up the server thread
-  // whenever there is a kernel running and let it sleep otherwise.
   if (GenericDevice.getRPCServer())
     GenericDevice.Plugin.getRPCServer().Thread->notify();
 
-  // In case we require more memory than the current limit.
   if (DynBlockMemSize >= MaxDynBlockMemSize) {
     CUresult AttrResult = cuFuncSetAttribute(
         Func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, DynBlockMemSize);
@@ -1468,11 +1463,11 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     MaxDynBlockMemSize = DynBlockMemSize;
   }
 
-  CUresult Res = cuLaunchKernel(Func, NumBlocks[0], NumBlocks[1], NumBlocks[2],
-                                NumThreads[0], NumThreads[1], NumThreads[2],
-                                DynBlockMemSize, Stream, nullptr, Config);
+  CUresult Res =
+      cuLaunchKernel(Func, NumBlocks[0], NumBlocks[1], NumBlocks[2],
+                     NumThreads[0], NumThreads[1], NumThreads[2],
+                     DynBlockMemSize, Stream, KernelParams, Extra);
 
-  // Register a callback to indicate when the kernel is complete.
   if (GenericDevice.getRPCServer())
     cuLaunchHostFunc(
         Stream,
@@ -1483,6 +1478,41 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
         &GenericDevice.Plugin);
 
   return Plugin::check(Res, "error in cuLaunchKernel for '%s': %s", getName());
+}
+
+Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
+                               uint32_t NumThreads[3], uint32_t NumBlocks[3],
+                               uint32_t DynBlockMemSize,
+                               KernelArgsTy &KernelArgs,
+                               KernelLaunchParamsTy LaunchParams,
+                               AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+  // The args size passed in LaunchParams may have tail padding, which is not
+  // accepted by the CUDA driver.
+  if (ArgsSize > LaunchParams.Size)
+    return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                         "mismatch in kernel arguments");
+
+  size_t ConfigArgsSize = ArgsSize;
+  void *Extra[] = {CU_LAUNCH_PARAM_BUFFER_POINTER, LaunchParams.Data,
+                   CU_LAUNCH_PARAM_BUFFER_SIZE,
+                   reinterpret_cast<void *>(&ConfigArgsSize),
+                   CU_LAUNCH_PARAM_END};
+
+  return launchKernelCommon(GenericDevice, NumThreads, NumBlocks,
+                            DynBlockMemSize, nullptr, Extra,
+                            AsyncInfoWrapper);
+}
+
+Error CUDAKernelTy::launchWithPtrArgs(GenericDeviceTy &GenericDevice,
+                                   uint32_t NumThreads[3],
+                                   uint32_t NumBlocks[3],
+                                   uint32_t DynBlockMemSize,
+                                   void **ArgPtrs,
+                                   const size_t *ArgSizes,
+                                   AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+  return launchKernelCommon(GenericDevice, NumThreads, NumBlocks,
+                            DynBlockMemSize, ArgPtrs, nullptr,
+                            AsyncInfoWrapper);
 }
 
 /// Class implementing the CUDA-specific functionalities of the global handler.

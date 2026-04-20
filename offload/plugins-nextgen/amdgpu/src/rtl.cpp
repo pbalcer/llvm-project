@@ -606,6 +606,12 @@ struct AMDGPUKernelTy : public GenericKernelTy {
                    KernelArgsTy &KernelArgs, KernelLaunchParamsTy LaunchParams,
                    AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
 
+  /// Launch with an array of pointers and sizes for each argument.
+  Error launchWithPtrArgs(GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+                       uint32_t NumBlocks[3], uint32_t DynBlockMemSize,
+                       void **ArgPtrs, const size_t *ArgSizes,
+                       AsyncInfoWrapperTy &AsyncInfoWrapper) const override;
+
   /// Return maximum block size for maximum occupancy
   ///
   /// TODO: This needs to be implemented for amdgpu
@@ -635,6 +641,15 @@ struct AMDGPUKernelTy : public GenericKernelTy {
   bool usesDynamicStack() const { return DynamicStack; }
 
 private:
+  /// Common implementation for launching an AMDGPU kernel. Fills implicit
+  /// arguments and submits the kernel to the stream.
+  Error launchKernelCommon(GenericDeviceTy &GenericDevice,
+                           uint32_t NumThreads[3], uint32_t NumBlocks[3],
+                           uint32_t DynBlockMemSize, void *AllArgs,
+                           uint32_t TotalArgsSize, size_t ExplicitArgsSize,
+                           AMDGPUMemoryManagerTy &ArgsMemoryManager,
+                           AsyncInfoWrapperTy &AsyncInfoWrapper) const;
+
   /// The kernel object to execute.
   uint64_t KernelObject;
 
@@ -4111,6 +4126,61 @@ private:
   AMDHostDeviceTy *HostDevice;
 };
 
+Error AMDGPUKernelTy::launchKernelCommon(
+    GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+    uint32_t NumBlocks[3], uint32_t DynBlockMemSize, void *AllArgs,
+    uint32_t TotalArgsSize, size_t ExplicitArgsSize,
+    AMDGPUMemoryManagerTy &ArgsMemoryManager,
+    AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+  uint64_t StackSize;
+  if (auto Err = GenericDevice.getDeviceStackSize(StackSize))
+    return Err;
+
+  // Fill COV5+ implicit arguments after the explicit ones.
+  uint64_t ImplArgsOffset =
+      utils::roundUp(ExplicitArgsSize, alignof(hsa_utils::AMDGPUImplicitArgsTy));
+  if (TotalArgsSize > ImplArgsOffset) {
+    hsa_utils::AMDGPUImplicitArgsTy *ImplArgs =
+        reinterpret_cast<hsa_utils::AMDGPUImplicitArgsTy *>(
+            utils::advancePtr(AllArgs, ImplArgsOffset));
+    uint64_t ImplArgsSize = TotalArgsSize - ImplArgsOffset;
+    std::memset(ImplArgs, 0, ImplArgsSize);
+
+    using ImplArgsTy = hsa_utils::AMDGPUImplicitArgsTy;
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountX, ImplArgsSize,
+                           NumBlocks[0]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountY, ImplArgsSize,
+                           NumBlocks[1]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountZ, ImplArgsSize,
+                           NumBlocks[2]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeX, ImplArgsSize,
+                           NumThreads[0]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeY, ImplArgsSize,
+                           NumThreads[1]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeZ, ImplArgsSize,
+                           NumThreads[2]);
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GridDims, ImplArgsSize,
+                           NumBlocks[2] * NumThreads[2] > 1
+                               ? 3
+                               : 1 + (NumBlocks[1] * NumThreads[1] != 1));
+    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::DynamicLdsSize, ImplArgsSize,
+                           DynBlockMemSize);
+  }
+
+  AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
+  AMDGPUStreamTy *Stream = nullptr;
+  if (auto Err = AMDGPUDevice.getStream(AsyncInfoWrapper, Stream))
+    return Err;
+
+  // HSA requires the group segment size to include both static and dynamic.
+  uint32_t TotalBlockMemSize =
+      getStaticBlockMemSize() + DynBlockMemSize;
+
+  return Stream->pushKernelLaunch(*this, AllArgs, NumThreads, NumBlocks,
+                                  TotalBlockMemSize, StackSize,
+                                  ArgsMemoryManager);
+}
+
 Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
                                  uint32_t NumThreads[3], uint32_t NumBlocks[3],
                                  uint32_t DynBlockMemSize,
@@ -4126,64 +4196,54 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (auto Err = ArgsMemoryManager.allocate(ArgsSize, &AllArgs))
     return Err;
 
-  uint64_t StackSize;
-  if (auto Err = GenericDevice.getDeviceStackSize(StackSize))
-    return Err;
-
   // Copy the explicit arguments.
   // TODO: We should expose the args memory manager alloc to the common part as
   // 	   alternative to copying them twice.
   if (LaunchParams.Size)
     std::memcpy(AllArgs, LaunchParams.Data, LaunchParams.Size);
 
-  AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
+  return launchKernelCommon(GenericDevice, NumThreads, NumBlocks,
+                            DynBlockMemSize, AllArgs, ArgsSize,
+                            LaunchParams.Size, ArgsMemoryManager,
+                            AsyncInfoWrapper);
+}
 
-  AMDGPUStreamTy *Stream = nullptr;
-  if (auto Err = AMDGPUDevice.getStream(AsyncInfoWrapper, Stream))
+Error AMDGPUKernelTy::launchWithPtrArgs(
+    GenericDeviceTy &GenericDevice, uint32_t NumThreads[3],
+    uint32_t NumBlocks[3], uint32_t DynBlockMemSize,
+    void **ArgPtrs, const size_t *ArgSizes,
+    AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+  // Each kernel argument is copied into the flat kernarg buffer at its
+  // metadata-defined offset and size.
+  // See: https://llvm.org/docs/AMDGPUUsage.html#code-object-v3-metadata
+  if (ArgPtrs && (!KernelInfo.has_value() || KernelInfo->ExplicitArgMDs.empty()))
+    return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                         "Argument pointers are provided, but kernel takes no arguments");
+
+  AMDGPUPluginTy &AMDGPUPlugin =
+      static_cast<AMDGPUPluginTy &>(GenericDevice.Plugin);
+  AMDHostDeviceTy &HostDevice = AMDGPUPlugin.getHostDevice();
+  AMDGPUMemoryManagerTy &ArgsMemoryManager = HostDevice.getArgsMemoryManager();
+
+  void *AllArgs = nullptr;
+  if (auto Err = ArgsMemoryManager.allocate(ArgsSize, &AllArgs))
     return Err;
 
-  uint64_t ImplArgsOffset = utils::roundUp(
-      LaunchParams.Size, alignof(hsa_utils::AMDGPUImplicitArgsTy));
-  if (ArgsSize > ImplArgsOffset) {
-    hsa_utils::AMDGPUImplicitArgsTy *ImplArgs =
-        reinterpret_cast<hsa_utils::AMDGPUImplicitArgsTy *>(
-            utils::advancePtr(AllArgs, ImplArgsOffset));
-
-    // Set the COV5+ implicit arguments to the appropriate values if present.
-    uint64_t ImplArgsSize = ArgsSize - ImplArgsOffset;
-    std::memset(ImplArgs, 0, ImplArgsSize);
-
-    using ImplArgsTy = hsa_utils::AMDGPUImplicitArgsTy;
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountX, ImplArgsSize,
-                           NumBlocks[0]);
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountY, ImplArgsSize,
-                           NumBlocks[1]);
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::BlockCountZ, ImplArgsSize,
-                           NumBlocks[2]);
-
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeX, ImplArgsSize,
-                           NumThreads[0]);
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeY, ImplArgsSize,
-                           NumThreads[1]);
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GroupSizeZ, ImplArgsSize,
-                           NumThreads[2]);
-
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::GridDims, ImplArgsSize,
-                           NumBlocks[2] * NumThreads[2] > 1
-                               ? 3
-                               : 1 + (NumBlocks[1] * NumThreads[1] != 1));
-
-    hsa_utils::initImplArg(ImplArgs, &ImplArgsTy::DynamicLdsSize, ImplArgsSize,
-                           KernelArgs.DynCGroupMem);
+  // Pack arguments into the flat kernarg buffer using the per-argument offset
+  // and size from kernel metadata.
+  size_t ExplicitEnd = 0;
+  if (ArgPtrs) {
+    const auto &ArgMDs = KernelInfo->ExplicitArgMDs;
+    for (size_t I = 0; I < ArgMDs.size(); I++) {
+      std::memcpy(utils::advancePtr(AllArgs, ArgMDs[I].Offset), ArgPtrs[I],
+                  ArgMDs[I].Size);
+    }
+    ExplicitEnd = ArgMDs.back().Offset + ArgMDs.back().Size;
   }
 
-  // HSA requires the group segment size to include both static and dynamic.
-  uint32_t TotalBlockMemSize = getStaticBlockMemSize() + DynBlockMemSize;
-
-  // Push the kernel launch into the stream.
-  return Stream->pushKernelLaunch(*this, AllArgs, NumThreads, NumBlocks,
-                                  TotalBlockMemSize, StackSize,
-                                  ArgsMemoryManager);
+  return launchKernelCommon(GenericDevice, NumThreads, NumBlocks,
+                            DynBlockMemSize, AllArgs, ArgsSize, ExplicitEnd,
+                            ArgsMemoryManager, AsyncInfoWrapper);
 }
 
 Error AMDGPUKernelTy::printLaunchInfoDetails(GenericDeviceTy &GenericDevice,
