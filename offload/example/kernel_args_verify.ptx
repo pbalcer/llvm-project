@@ -1,0 +1,43 @@
+.version 8.0
+.target sm_75
+.address_size 64
+
+
+.extern .shared .align 4 .b8 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__shared_mem[];
+
+.weak .entry _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE_(
+.param .u32 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_0,
+.param .u32 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_1,
+.param .u32 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_2,
+.param .u64 .ptr .global .align 4 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_3,
+.param .align 8 .b8 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_4[8],
+.param .u64 .ptr .global .align 4 _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_5
+)
+{
+.reg .b32 %r<7>;
+.reg .b64 %rd<11>;
+
+
+        ld.param.s32 %rd1, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_0];
+ld.param.b32 %r1, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_1];
+ld.param.s32 %rd2, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_2];
+mov.b64 %rd3, _ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__shared_mem;
+add.s64 %rd4, %rd3, %rd2;
+ld.param.b64 %rd5, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_3];
+add.s64 %rd6, %rd3, %rd1;
+ld.param.b64 %rd7, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_5];
+ld.param.b64 %rd8, [_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE__param_4];
+shl.b64 %rd9, %rd8, 2;
+add.s64 %rd10, %rd5, %rd9;
+st.shared.b32 [%rd6], %r1;
+add.s32 %r2, %r1, 1;
+st.shared.b32 [%rd4], %r2;
+ld.global.b32 %r3, [%rd10];
+ld.shared.b32 %r4, [%rd6];
+add.s32 %r5, %r3, %r2;
+add.s32 %r6, %r5, %r4;
+st.global.b32 [%rd10], %r6;
+st.global.b32 [%rd7], %r6;
+ret;
+
+}

@@ -1,0 +1,89 @@
+; SPIR-V
+; Version: 1.4
+; Schema: 0
+;
+; Kernel param layout (derived from kernel_args_sycl.cpp + 1 trailing arena):
+;   [0] %uint                                         local_mem_off
+;   [1] %uint                                         val
+;   [2] %uint                                         local_mem24_off
+;   [3] _ptr_CrossWorkgroup__arr_uchar_ulong_4        buf_acc
+;   [4] _ptr_Function_class_sycl::id  (ByVal)         buf_acc accessor offset
+;   [5] _ptr_CrossWorkgroup_uint                      usm_ptr
+;   [6] _ptr_Workgroup_uchar                          shared_arena (synthesized)
+               OpCapability Addresses
+               OpCapability Kernel
+               OpCapability Int64
+               OpCapability Int8
+          %1 = OpExtInstImport "OpenCL.std"
+               OpMemoryModel Physical64 OpenCL
+               OpEntryPoint Kernel %kernel "_ZTSZZ4mainENKUlRN4sycl3_V17handlerEE_clES2_EUlNS0_7nd_itemILi1EEEE_"
+               OpSource OpenCL_CPP 100000
+               OpName %class_sycl___V1__id "class.sycl::_V1::id"
+               OpName %class_sycl___V1__detail__array "class.sycl::_V1::detail::array"
+               OpName %_arg_local_mem_off "_arg_local_mem_off"
+               OpName %_arg_val "_arg_val"
+               OpName %_arg_local_mem24_off "_arg_local_mem24_off"
+               OpName %_arg_buf_acc "_arg_buf_acc"
+               OpName %_arg_buf_acc10 "_arg_buf_acc10"
+               OpName %_arg_usm_ptr "_arg_usm_ptr"
+               OpName %_arg_shared_arena "_arg_shared_arena"
+               OpName %entry "entry"
+               OpName %add_ptr_i "add.ptr.i"
+               OpName %add_i "add.i"
+               OpName %add7_i "add7.i"
+               OpName %add10_i "add10.i"
+               OpDecorate %_arg_shared_arena Alignment 4
+               OpDecorate %_arg_buf_acc Alignment 4
+               OpDecorate %_arg_buf_acc10 FuncParamAttr ByVal
+               OpDecorate %_arg_buf_acc10 Alignment 8
+               OpDecorate %_arg_usm_ptr Alignment 4
+               OpDecorate %add_i NoSignedWrap
+               OpDecorate %add7_i NoSignedWrap
+               OpDecorate %add10_i NoSignedWrap
+       %uint = OpTypeInt 32 0
+      %ulong = OpTypeInt 64 0
+      %uchar = OpTypeInt 8 0
+    %ulong_4 = OpConstant %ulong 4
+    %ulong_1 = OpConstant %ulong 1
+     %uint_1 = OpConstant %uint 1
+       %void = OpTypeVoid
+%_ptr_Workgroup_uchar = OpTypePointer Workgroup %uchar
+%_ptr_Workgroup_uint = OpTypePointer Workgroup %uint
+%_arr_uchar_ulong_4 = OpTypeArray %uchar %ulong_4
+%_ptr_CrossWorkgroup__arr_uchar_ulong_4 = OpTypePointer CrossWorkgroup %_arr_uchar_ulong_4
+%_arr_ulong_ulong_1 = OpTypeArray %ulong %ulong_1
+%class_sycl___V1__detail__array = OpTypeStruct %_arr_ulong_ulong_1
+%class_sycl___V1__id = OpTypeStruct %class_sycl___V1__detail__array
+%_ptr_Function_class_sycl___V1__id = OpTypePointer Function %class_sycl___V1__id
+%_ptr_CrossWorkgroup_uint = OpTypePointer CrossWorkgroup %uint
+     %fnType = OpTypeFunction %void %uint %uint %uint %_ptr_CrossWorkgroup__arr_uchar_ulong_4 %_ptr_Function_class_sycl___V1__id %_ptr_CrossWorkgroup_uint %_ptr_Workgroup_uchar
+%_ptr_Function_ulong = OpTypePointer Function %ulong
+     %kernel = OpFunction %void None %fnType
+%_arg_local_mem_off = OpFunctionParameter %uint
+   %_arg_val = OpFunctionParameter %uint
+%_arg_local_mem24_off = OpFunctionParameter %uint
+%_arg_buf_acc = OpFunctionParameter %_ptr_CrossWorkgroup__arr_uchar_ulong_4
+%_arg_buf_acc10 = OpFunctionParameter %_ptr_Function_class_sycl___V1__id
+%_arg_usm_ptr = OpFunctionParameter %_ptr_CrossWorkgroup_uint
+%_arg_shared_arena = OpFunctionParameter %_ptr_Workgroup_uchar
+      %entry = OpLabel
+         %26 = OpBitcast %_ptr_Function_ulong %_arg_buf_acc10
+         %27 = OpLoad %ulong %26 Aligned 8
+  %add_ptr_i = OpInBoundsPtrAccessChain %_ptr_CrossWorkgroup__arr_uchar_ulong_4 %_arg_buf_acc %27
+     %lm0_u8 = OpInBoundsPtrAccessChain %_ptr_Workgroup_uchar %_arg_shared_arena %_arg_local_mem_off
+        %lm0 = OpBitcast %_ptr_Workgroup_uint %lm0_u8
+     %lm1_u8 = OpInBoundsPtrAccessChain %_ptr_Workgroup_uchar %_arg_shared_arena %_arg_local_mem24_off
+        %lm1 = OpBitcast %_ptr_Workgroup_uint %lm1_u8
+               OpStore %lm0 %_arg_val Aligned 4
+      %add_i = OpIAdd %uint %_arg_val %uint_1
+               OpStore %lm1 %add_i Aligned 4
+         %31 = OpBitcast %_ptr_CrossWorkgroup_uint %add_ptr_i
+         %32 = OpLoad %uint %31 Aligned 4
+         %33 = OpLoad %uint %lm0 Aligned 4
+     %add7_i = OpIAdd %uint %32 %33
+    %add10_i = OpIAdd %uint %add7_i %add_i
+         %36 = OpBitcast %_ptr_CrossWorkgroup_uint %add_ptr_i
+               OpStore %36 %add10_i Aligned 4
+               OpStore %_arg_usm_ptr %add10_i Aligned 4
+               OpReturn
+               OpFunctionEnd
