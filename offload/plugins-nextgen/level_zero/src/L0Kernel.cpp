@@ -16,6 +16,7 @@
 #include "L0Program.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm::omp::target::plugin {
 
@@ -56,6 +57,7 @@ Error L0KernelTy::readKernelProperties(L0ProgramTy &Program) {
   CALL_ZE_RET_ERROR(zeKernelGetProperties, zeKernel, &KP);
   KernelPR.SIMDWidth = KP.maxSubgroupSize;
   KernelPR.Width = KP.maxSubgroupSize;
+  KernelPR.NumKernelArgs = KP.numKernelArgs;
 
   if (KP.pNext)
     KernelPR.Width = KPrefGRPSize.preferredMultiple;
@@ -509,10 +511,6 @@ Error L0KernelTy::launchWithPtrArgs(GenericDeviceTy &GenericDevice,
                                  void **ArgPtrs,
                                  const size_t *ArgSizes,
                                  AsyncInfoWrapperTy &AsyncInfoWrapper) const {
-  if (DynBlockMemSize > 0)
-    return Plugin::error(ErrorCode::UNSUPPORTED,
-                         "dynamic shared memory is unsupported in L0 plugin");
-
   auto &l0Device = L0DeviceTy::makeL0Device(GenericDevice);
   __tgt_async_info *AsyncInfo = AsyncInfoWrapper;
 
@@ -540,6 +538,21 @@ Error L0KernelTy::launchWithPtrArgs(GenericDeviceTy &GenericDevice,
 
   if (auto Err = setIndirectFlags(l0Device, KEnv))
     return Err;
+
+  // If dynamic shared local memory is requested, append its size as the last
+  // kernel argument. The kernel is expected to declare a single SLM argument
+  // at the last position.
+  SmallVector<void *, 16> ArgPtrsWithSLM;
+  if (DynBlockMemSize > 0) {
+    const uint32_t NumKernelArgs = KernelPR.NumKernelArgs;
+    if (NumKernelArgs == 0)
+      return Plugin::error(ErrorCode::INVALID_ARGUMENT,
+                           "DynBlockMemSize is set, but kernel takes no arguments");
+    ArgPtrsWithSLM.reserve(NumKernelArgs);
+    ArgPtrsWithSLM.append(ArgPtrs, ArgPtrs + (NumKernelArgs - 1));
+    ArgPtrsWithSLM.push_back(&DynBlockMemSize);
+    ArgPtrs = ArgPtrsWithSLM.data();
+  }
 
   ze_group_count_t GroupCounts = {NumBlocks[0], NumBlocks[1], NumBlocks[2]};
   ze_group_size_t GroupSizes = {NumThreads[0], NumThreads[1], NumThreads[2]};
