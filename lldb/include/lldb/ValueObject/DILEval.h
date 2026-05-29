@@ -36,6 +36,11 @@ lldb::ValueObjectSP LookupGlobalIdentifier(llvm::StringRef name_ref,
                                            lldb::TargetSP target_sp,
                                            lldb::DynamicValueType use_dynamic);
 
+/// Given the name of an identifier, attempt to find an enumeration value.
+/// If found, return a ValueObject with a const scalar value of the enum.
+lldb::ValueObjectSP LookupEnumValue(llvm::StringRef name_ref,
+                                    ExecutionContextScope &ctx_scope);
+
 class Interpreter : Visitor {
 public:
   Interpreter(lldb::TargetSP target, llvm::StringRef expr,
@@ -143,7 +148,6 @@ private:
   std::shared_ptr<StackFrame> m_exe_ctx_scope;
   lldb::DynamicValueType m_use_dynamic;
   bool m_use_synthetic;
-  bool m_fragile_ivar;
   bool m_check_ptr_vs_member;
   // TODO: Remove 'maybe_unused' when next PR, using this, gets submitted.
   [[maybe_unused]] bool m_allow_var_updates;
